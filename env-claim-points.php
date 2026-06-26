@@ -77,8 +77,8 @@ final class Receipt_Claim {
       'gotab_date_field' => 'created',
       'claim_duration_amount' => '1',
       'claim_duration_unit' => 'months',
-      'rate_limit_attempts' => '5',
-      'rate_limit_minutes' => '15',
+      'rate_limit_attempts' => '15',
+      'rate_limit_minutes' => '30',
       'success_message' => 'Your receipt was successfully claimed and points have been added to your account.',
       'already_claimed_message' => 'This receipt has already been applied to a loyalty account.',
       'generic_error_message' => 'We were unable to process this receipt claim. Please verify your information or try again later.',
@@ -434,7 +434,7 @@ final class Receipt_Claim {
     ob_start();
     ?>
     
-    <form class="receipt-claim" data-receipt-claim novalidate>
+    <form id="claim-points" class="receipt-claim" data-receipt-claim novalidate>
       <div class="receipt-claim__intro">
         <h3><?php echo $atts['title']; ?></h3>
         <?php if($atts['desc']) : ?>
@@ -482,7 +482,7 @@ final class Receipt_Claim {
     }
 
     if (!$this->passes_rate_limit($o)) {
-      return $this->error_response('rate_limited', 'Too many attempts. Please wait and try again.', 429);
+      return $this->error_response('rate_limited', $this->rate_limit_message($o), 429);
     }
 
     $tab_ref = isset($params['tabRef']) ? sanitize_text_field($params['tabRef']) : '';
@@ -578,7 +578,7 @@ final class Receipt_Claim {
       return rest_ensure_response(['success' => true, 'message' => $o['success_message'], 'requestRef' => $request_ref]);
     }
 
-    $message = $success && !$checkout_was_claimed ? $o['already_claimed_message'] : ($claim['errorMessage'] ?? $o['generic_error_message']);
+    $message = $success && !$checkout_was_claimed ? $o['already_claimed_message'] : $this->clutch_claim_message($claim, $o);
     $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'not_claimed', 'message' => $message, 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $request_ref, 'clutch_checkout_request_ref' => $checkout_request_ref, 'clutch_success' => (int) $success, 'clutch_checkout_was_claimed' => (int) $checkout_was_claimed, 'raw_context' => $this->debug_context($claim, $o)]);
 
     return $this->error_response('not_claimed', $message, 400, ['requestRef' => $request_ref]);
@@ -603,7 +603,7 @@ final class Receipt_Claim {
     $response = wp_remote_post($o['gotab_graph_url'], ['timeout' => 20, 'headers' => ['Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'Accept' => 'application/json'], 'body' => wp_json_encode(['query' => $query, 'variables' => $variables])]);
 
     if (is_wp_error($response)) {
-      return new WP_Error('gotab_request_failed', 'GoTab lookup failed. Please try again.', $response->get_error_message());
+      return new WP_Error('gotab_request_failed', 'We couldn’t look up that receipt right now. Please try again.', $response->get_error_message());
     }
 
     $code = wp_remote_retrieve_response_code($response);
@@ -612,7 +612,7 @@ final class Receipt_Claim {
     if ($code < 200 || $code >= 300 || !empty($body['errors'])) {
       delete_transient('gotab_token');
       delete_transient($this->gotab_token_transient_key($o));
-      return new WP_Error('gotab_graph_error', 'GoTab lookup failed. Please try again.', $body ?: ['httpCode' => $code]);
+      return new WP_Error('gotab_graph_error', 'We couldn’t look up that receipt right now. Please try again.', $body ?: ['httpCode' => $code]);
     }
 
     $tabs = $body['data']['tabsList'] ?? [];
@@ -622,11 +622,11 @@ final class Receipt_Claim {
     }
 
     if (count($tabs) > 1) {
-      return new WP_Error('gotab_multiple_matches', 'Multiple GoTab receipts matched that Tab Reference ID. Please contact support.', $body);
+      return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', $body);
     }
 
     if (empty($tabs[0]['tabId'])) {
-      return new WP_Error('gotab_missing_tab_id', 'GoTab returned a receipt but no Tab ID.', $body);
+      return new WP_Error('gotab_missing_tab_id', 'We found a matching receipt, but we couldn’t verify it. Please try again or contact support.', $body);
     }
 
     return $tabs[0];
@@ -639,20 +639,20 @@ final class Receipt_Claim {
     }
 
     if ($o['gotab_api_access_id'] === '' || $o['gotab_api_access_secret'] === '') {
-      return new WP_Error('gotab_missing_credentials', 'GoTab credentials are not configured.');
+      return new WP_Error('gotab_missing_credentials', 'The receipt lookup service is not available right now.');
     }
 
     $response = wp_remote_post($o['gotab_token_url'], ['timeout' => 20, 'headers' => ['Content-Type' => 'application/json', 'Accept' => 'application/json'], 'body' => wp_json_encode(['api_access_id' => $o['gotab_api_access_id'], 'api_access_secret' => $o['gotab_api_access_secret']])]);
 
     if (is_wp_error($response)) {
-      return new WP_Error('gotab_auth_failed', 'GoTab authentication failed.', $response->get_error_message());
+      return new WP_Error('gotab_auth_failed', 'The receipt lookup service is not available right now.', $response->get_error_message());
     }
 
     $code = wp_remote_retrieve_response_code($response);
     $body = json_decode(wp_remote_retrieve_body($response), true);
 
     if ($code < 200 || $code >= 300 || empty($body['token'])) {
-      return new WP_Error('gotab_auth_failed', 'GoTab authentication failed.', $body ?: ['httpCode' => $code]);
+      return new WP_Error('gotab_auth_failed', 'The receipt lookup service is not available right now.', $body ?: ['httpCode' => $code]);
     }
 
     $ttl = !empty($body['expiresIn']) ? max(60, absint($body['expiresIn']) - 120) : DAY_IN_SECONDS - 120;
@@ -687,11 +687,11 @@ final class Receipt_Claim {
     }
 
     if (count($cards) > 1) {
-      return new WP_Error('clutch_multiple_members', 'Multiple loyalty accounts matched that information. Please use your loyalty card number.', $body);
+      return new WP_Error('clutch_multiple_members', 'We found more than one loyalty account with that information. Please use your loyalty card number instead.', $body);
     }
 
     if (empty($cards[0]['cardNumber'])) {
-      return new WP_Error('clutch_missing_card_number', 'A matching loyalty account was found, but no card number was returned.', $body);
+      return new WP_Error('clutch_missing_card_number', 'We found your loyalty account, but the loyalty system did not return a card number for it. Please use a different identifier or contact support.', $body);
     }
 
     return (string) $cards[0]['cardNumber'];
@@ -709,11 +709,11 @@ final class Receipt_Claim {
     $body = json_decode(wp_remote_retrieve_body($response), true);
 
     if ($code < 200 || $code >= 300) {
-      return new WP_Error('clutch_claim_failed', 'Receipt claim failed. Please try again.', $body ?: ['httpCode' => $code]);
+      return new WP_Error('clutch_claim_failed', $this->clutch_claim_message($body, $o), $body ?: ['httpCode' => $code]);
     }
 
     if (!is_array($body)) {
-      return new WP_Error('clutch_invalid_response', 'Clutch returned an invalid response.');
+      return new WP_Error('clutch_invalid_response', 'We couldn’t process this receipt claim right now. Please try again later.');
     }
 
     return $body;
@@ -822,6 +822,57 @@ final class Receipt_Claim {
     return '';
   }
 
+  private function clutch_claim_message($body, $o) {
+    $message = $this->upstream_error_message($body);
+    $message_lower = strtolower($message);
+
+    if (strpos($message_lower, 'no checkout found with externalid') !== false) {
+      return 'We found your loyalty account, but this receipt is not available to claim yet. Please verify the receipt number and try again later.';
+    }
+
+    if (strpos($message_lower, 'more than one transaction found with externalid') !== false) {
+      return $o['already_claimed_message'];
+    }
+
+    if (strpos($message_lower, 'already claimed') !== false) {
+      return $o['already_claimed_message'];
+    }
+
+    return $o['generic_error_message'];
+  }
+
+  private function upstream_error_message($body) {
+    if (is_string($body)) {
+      return sanitize_text_field($body);
+    }
+
+    if (!is_array($body)) {
+      return '';
+    }
+
+    foreach (['errorMessage', 'message', 'error', 'error_description'] as $key) {
+      if (!empty($body[$key]) && is_scalar($body[$key])) {
+        return sanitize_text_field((string) $body[$key]);
+      }
+    }
+
+    if (!empty($body['errors']) && is_array($body['errors'])) {
+      foreach ($body['errors'] as $error) {
+        if (is_array($error)) {
+          foreach (['message', 'errorMessage'] as $key) {
+            if (!empty($error[$key]) && is_scalar($error[$key])) {
+              return sanitize_text_field((string) $error[$key]);
+            }
+          }
+        } elseif (is_string($error) && $error !== '') {
+          return sanitize_text_field($error);
+        }
+      }
+    }
+
+    return '';
+  }
+
   private function format_bigint_variable($value) {
     $digits = preg_replace('/\D+/', '', (string) $value);
     return $digits === '' ? $value : $digits;
@@ -839,6 +890,15 @@ final class Receipt_Claim {
 
     set_transient($key, $attempts + 1, absint($o['rate_limit_minutes']) * MINUTE_IN_SECONDS);
     return true;
+  }
+
+  private function rate_limit_message($o) {
+    $attempts = max(1, absint($o['rate_limit_attempts']));
+    $minutes = max(1, absint($o['rate_limit_minutes']));
+    $attempt_label = $attempts === 1 ? 'attempt' : 'attempts';
+    $minute_label = $minutes === 1 ? 'minute' : 'minutes';
+
+    return sprintf('Too many attempts. Limit is %d %s per %d %s. Please wait and try again.', $attempts, $attempt_label, $minutes, $minute_label);
   }
 
   private function ip_hash() {

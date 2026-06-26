@@ -182,7 +182,6 @@
         const data = await response.json();
 
         if (!response.ok || !data.success) {
-          console.log(response); console.log(data);
           setMessage(data.message || 'Unable to submit receipt claim.', 'error');
         } else {
           setMessage(data.message || 'Receipt claimed successfully.', 'success');
@@ -190,7 +189,6 @@
           updateFields();
         }
       } catch (error) {
-        console.log(response); console.log(data);
         setMessage('Unable to submit receipt claim. Please try again.', 'error');
       } finally {
         button.disabled = false;
