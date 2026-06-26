@@ -1,0 +1,18 @@
+.receipt-claim{display:grid;gap:1rem;max-width:600px;margin:0 auto;padding:20px;border:1px solid #e0e0e0;border-radius:8px}
+.receipt-claim *{box-sizing:border-box}
+.receipt-claim__intro h3{margin:0 0 14px 0}
+.receipt-claim__field{display:grid;gap:.35rem}
+.receipt-claim label,.receipt-claim legend{font-weight:600}
+.receipt-claim input[type="text"],.receipt-claim input[type="tel"],.receipt-claim input[type="email"]{width:100%;padding:.75rem;border:1px solid #ccc;border-radius:4px;transition:box-shadow 0.3s}
+.receipt-claim input[type="text"]:focus,.receipt-claim input[type="tel"]:focus,.receipt-claim input[type="email"]:focus{box-shadow:0 4px 6px 2px rgba(0,0,0,.05)}
+.receipt-claim input[aria-invalid="true"]{border-color:#b42318;box-shadow:0 0 0 1px #b42318}
+.receipt-claim__fieldset{display:grid;gap:.65rem;margin:0;padding:1rem;border:1px solid #e4e4e4;border-radius:4px;background-color:rgba(255,255,255,.1)}
+.receipt-claim__choice{display:flex;align-items:center;gap:.5rem;font-weight:400}
+.receipt-claim button{justify-self:start;padding:.75rem 1rem;cursor:pointer;background-color:#073763;color:white;border:none;border-radius:4px;width:100%;font-size:16px;font-weight:bold; transition:background-color 0.3s, box-shadow 0.3s}
+.receipt-claim button:hover,.receipt-claim button:focus{background-color:#06192b;box-shadow:0 6px 12px 4px rgba(0,0,0,.1)}
+.receipt-claim button:active{background-color:#02070b;box-shadow:0 8px 16px 6px rgba(0,0,0,.2)}
+.receipt-claim button[disabled]{cursor:progress;opacity:.7}
+.receipt-claim__message{min-height:1.5rem;font-weight:600}
+.receipt-claim__message[data-type="success"]{color:#167a36}
+.receipt-claim__message[data-type="error"]{color:#b42318}
+.receipt-claim__hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
