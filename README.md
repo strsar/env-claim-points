@@ -1,4 +1,4 @@
-# Member Receipt Claim Form
+# Receipt Claim Manager
 
 ## Shortcode
 

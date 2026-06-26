@@ -1,9 +1,13 @@
 <?php
 /**
- * Plugin Name: [ENV] Receipt Claim for Loyalty Points
- * Description: Shortcode-based receipt claim form for GoTab tabRef → tabId lookup and Clutch barcodeClaim submission.
+ * Plugin Name: [ENV] Receipt Claim Manager
+ * Description: Adds a shortcode-based receipt claim form that looks up GoTab receipt details and submits (tabRef → tabId) eligible loyalty point claims through Clutch (barcodeClaim).
  * Version: 1.0.1
- * Author: Envisionit
+ * Author: Envisionit, Scott Trsar
+ * Author URI: https://envisionitagency.com/
+ * Developer: Scott Trsar
+ * Contact: https://www.linkedin.com/in/trsar
+ * Github: https://github.com/strsar
  */
 
 if (!defined('ABSPATH')) {
@@ -31,6 +35,7 @@ final class Receipt_Claim {
     add_shortcode('receipt_claim_form', [$this, 'shortcode']);
     add_action('wp_enqueue_scripts', [$this, 'register_assets']);
     add_action('rest_api_init', [$this, 'register_rest_routes']);
+    add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'plugin_action_links']);
     register_activation_hook(__FILE__, [__CLASS__, 'activate']);
   }
 
@@ -90,7 +95,12 @@ final class Receipt_Claim {
   }
 
   public function admin_menu() {
-    add_options_page('Receipt Claim', 'Member Claims', 'manage_options', 'receipt-claim', [$this, 'settings_page']);
+    add_options_page('Receipt Claim', 'Loyalty Point Claims', 'manage_options', 'receipt-claim', [$this, 'settings_page']);
+  }
+
+  public function plugin_action_links($links) {
+    array_unshift($links, '<a href="' . esc_url(admin_url('options-general.php?page=receipt-claim')) . '">Settings</a>');
+    return $links;
   }
 
   public function register_settings() {
@@ -177,16 +187,16 @@ final class Receipt_Claim {
         <div id="receipt-claim-tab-how-it-works" class="receipt-claim-tab-panel">
           <h2>How It Works</h2>
           <ol>
-            <li>The shortcode renders a custom `novalidate` form and the front-end script validates the selected identifier before submit.</li>
-            <li>The browser sends a JSON request with `tabRef`, one identifier type, and the REST nonce to the WordPress endpoint.</li>
+            <li>The shortcode renders a custom <code>novalidate</code> form and the front-end script validates the selected identifier before submit.</li>
+            <li>The browser sends a JSON request with <code>tabRef</code>, one identifier type, and the REST nonce to the WordPress endpoint.</li>
             <li>The REST handler checks the nonce, honeypot field, and rate limit before any external API call is made.</li>
-            <li>The plugin resolves the submitted identifier type as `cardNumber`, `mobilePhone`, or `email`. If the explicit radio value is missing, it infers the type from the submitted field names.</li>
+            <li>The plugin resolves the submitted identifier type as <code>cardNumber</code>, <code>mobilePhone</code>, or <code>email</code>. If the explicit radio value is missing, it infers the type from the submitted field names.</li>
             <li>The plugin authenticates to GoTab with the configured API access credentials and reuses a cached token until it expires.</li>
-            <li>The plugin looks up the receipt in GoTab by `tabRef`. When a GoTab Location ID is configured, it scopes the lookup to that location.</li>
+            <li>The plugin looks up the receipt in GoTab by <code>tabRef</code>. When a GoTab Location ID is configured, it scopes the lookup to that location.</li>
             <li>The plugin checks the receipt date against the configured claim window using the selected GoTab date field.</li>
-            <li>If the guest entered a card number, that value is used directly. If the guest entered a phone number, Clutch search runs with `phone` OR `mobilePhone`. If the guest entered an email address, Clutch search runs by `email`.</li>
-            <li>If Clutch returns exactly one loyalty card, the plugin calls `/flex/barcodeClaim` with GoTab `tabId` as `externalId` and the resolved Clutch card number.</li>
-            <li>The plugin treats the claim as successful only when Clutch returns both `success` and `checkoutWasClaimed` as truthy values.</li>
+            <li>If the guest entered a card number, that value is used directly. If the guest entered a phone number, Clutch search runs with <code>phone</code> OR <code>mobilePhone</code>. If the guest entered an email address, Clutch search runs by <code>email</code>.</li>
+            <li>If Clutch returns exactly one loyalty card, the plugin calls <code>/flex/barcodeClaim</code> with GoTab <code>tabId</code> as <code>externalId</code> and the resolved Clutch card number.</li>
+            <li>The plugin treats the claim as successful only when Clutch returns both <code>success</code> and <code>checkoutWasClaimed</code> as truthy values.</li>
             <li>When Debug Mode is enabled, the plugin stores the upstream GoTab or Clutch response body in the log record and shows it in the Logs tab.</li>
           </ol>
         </div>
