@@ -138,6 +138,8 @@ final class Receipt_Claim {
     delete_transient('gotab_token');
     $this->clear_gotab_token_transients($existing);
     $this->clear_gotab_token_transients($output);
+    $this->clear_gotab_location_transients($existing);
+    $this->clear_gotab_location_transients($output);
 
     return $output;
   }
@@ -192,7 +194,7 @@ final class Receipt_Claim {
             <li>The REST handler checks the nonce, honeypot field, and rate limit before any external API call is made.</li>
             <li>The plugin resolves the submitted identifier type as <code>cardNumber</code>, <code>mobilePhone</code>, or <code>email</code>. If the explicit radio value is missing, it infers the type from the submitted field names.</li>
             <li>The plugin authenticates to GoTab with the configured API access credentials and reuses a cached token until it expires.</li>
-            <li>The plugin looks up the receipt in GoTab by <code>tabRef</code>. When a GoTab Location ID is configured, it scopes the lookup to that location.</li>
+            <li>The plugin looks up the receipt in GoTab by <code>tabRef</code>. It first loads the accessible GoTab locations, then sends one multi-location GoTab query that checks each location for a matching tab.</li>
             <li>The plugin checks the receipt date against the configured claim window using the selected GoTab date field.</li>
             <li>If the guest entered a card number, that value is used directly. If the guest entered a phone number, Clutch search runs with <code>phone</code> OR <code>mobilePhone</code>. If the guest entered an email address, Clutch search runs by <code>email</code>.</li>
             <li>If Clutch returns exactly one loyalty card, the plugin calls <code>/flex/barcodeClaim</code> with GoTab <code>tabId</code> as <code>externalId</code> and the resolved Clutch card number.</li>
@@ -210,14 +212,14 @@ final class Receipt_Claim {
             <?php $this->field_text('clutch_stage_api_key', 'Stage API Key', $o); ?>
             <?php $this->field_password('clutch_stage_api_secret', 'Stage API Secret', $o); ?>
             <?php $this->field_text('clutch_stage_brand', 'Stage Brand Header', $o); ?>
-            <?php $this->field_text('clutch_stage_location', 'Stage Location Header', $o); ?>
+            <?php $this->field_text('clutch_stage_location', 'Stage Location Header', $o, 'If left blank, the plugin will pass the locationId returned by the GoTab tabRef lookup.'); ?>
             <?php $this->field_text('clutch_stage_terminal', 'Stage Terminal Header', $o); ?>
             <?php $this->field_text('clutch_stage_card_set_ids', 'Stage Card Set ID(s)', $o, 'Stored for Clutch card-set scoping if support confirms they are needed.'); ?>
             <?php $this->field_section('Production Credentials', 'Used when Active Environment is Production.'); ?>
             <?php $this->field_text('clutch_prod_api_key', 'Production API Key', $o); ?>
             <?php $this->field_password('clutch_prod_api_secret', 'Production API Secret', $o); ?>
             <?php $this->field_text('clutch_prod_brand', 'Production Brand Header', $o); ?>
-            <?php $this->field_text('clutch_prod_location', 'Production Location Header', $o); ?>
+            <?php $this->field_text('clutch_prod_location', 'Production Location Header', $o, 'If left blank, the plugin will pass the locationId returned by the GoTab tabRef lookup.'); ?>
             <?php $this->field_text('clutch_prod_terminal', 'Production Terminal Header', $o); ?>
             <?php $this->field_text('clutch_prod_card_set_ids', 'Production Card Set ID(s)', $o, 'Stored for Clutch card-set scoping if support confirms they are needed.'); ?>
           </table>
@@ -232,13 +234,13 @@ final class Receipt_Claim {
             <?php $this->field_text('gotab_stage_graph_url', 'Stage GraphQL URL', $o); ?>
             <?php $this->field_text('gotab_stage_api_access_id', 'Stage API Access ID', $o); ?>
             <?php $this->field_password('gotab_stage_api_access_secret', 'Stage API Access Secret', $o); ?>
-            <?php $this->field_text('gotab_stage_location_id', 'Stage GoTab Location ID', $o, 'Optional but recommended if credentials access multiple locations.'); ?>
+            <?php $this->field_text('gotab_stage_location_id', 'Stage GoTab Location ID', $o, 'Optional reference location to store with the environment. The receipt lookup now queries all accessible GoTab locations in one request.'); ?>
             <?php $this->field_section('Production Credentials', 'Used when Active Environment is Production.'); ?>
             <?php $this->field_text('gotab_prod_token_url', 'Production Token URL', $o); ?>
             <?php $this->field_text('gotab_prod_graph_url', 'Production GraphQL URL', $o); ?>
             <?php $this->field_text('gotab_prod_api_access_id', 'Production API Access ID', $o); ?>
             <?php $this->field_password('gotab_prod_api_access_secret', 'Production API Access Secret', $o); ?>
-            <?php $this->field_text('gotab_prod_location_id', 'Production GoTab Location ID', $o, 'Optional but recommended if credentials access multiple locations.'); ?>
+            <?php $this->field_text('gotab_prod_location_id', 'Production GoTab Location ID', $o, 'Optional reference location to store with the environment. The receipt lookup now queries all accessible GoTab locations in one request.'); ?>
             <?php $this->field_select('gotab_date_field', 'Receipt Date Field', ['created' => 'created', 'updated' => 'updated', 'fiscalDay' => 'fiscalDay'], $o); ?>
           </table>
           <?php submit_button('Save GoTab API Settings'); ?>
@@ -539,6 +541,10 @@ final class Receipt_Claim {
       return $this->error_response('expired', $o['expired_message'], 400);
     }
 
+    if ($o['clutch_location'] === '' && !empty($tab['locationId'])) {
+      $o['clutch_location'] = (string) $tab['locationId'];
+    }
+
     if ($loyalty_type === 'mobilePhone') {
       $phone = isset($params['mobilePhone']) ? $this->normalize_phone($params['mobilePhone']) : '';
       if ($phone === '') {
@@ -590,46 +596,61 @@ final class Receipt_Claim {
       return $token;
     }
 
-    $fields = 'tabId tabRef created updated fiscalDay';
+    $location_ids = $this->gotab_location_ids($token, $o);
 
-    if ($o['gotab_location_id'] !== '') {
-      $query = 'query FindTab($locationId: BigInt!, $tabRef: String!) { tabsList(condition: { locationId: $locationId }, filter: { tabRef: { equalTo: $tabRef } }, first: 2) { ' . $fields . ' } }';
-      $variables = ['locationId' => $this->format_bigint_variable($o['gotab_location_id']), 'tabRef' => $tab_ref];
-    } else {
-      $query = 'query FindTab($tabRef: String!) { tabsList(filter: { tabRef: { equalTo: $tabRef } }, first: 2) { ' . $fields . ' } }';
-      $variables = ['tabRef' => $tab_ref];
+    if (is_wp_error($location_ids)) {
+      return $location_ids;
     }
 
-    $response = wp_remote_post($o['gotab_graph_url'], ['timeout' => 20, 'headers' => ['Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'Accept' => 'application/json'], 'body' => wp_json_encode(['query' => $query, 'variables' => $variables])]);
-
-    if (is_wp_error($response)) {
-      return new WP_Error('gotab_request_failed', 'We couldn’t look up that receipt right now. Please try again.', $response->get_error_message());
+    if (empty($location_ids)) {
+      return new WP_Error('gotab_missing_locations', 'We couldn’t look up that receipt right now. Please try again.');
     }
 
-    $code = wp_remote_retrieve_response_code($response);
-    $body = json_decode(wp_remote_retrieve_body($response), true);
+    $fields = 'tabId tabUuid tabRef status total created updated fiscalDay locationId';
+    $aliases = [];
+    $query_parts = [];
+    $matches = [];
+    $alias_index = 0;
 
-    if ($code < 200 || $code >= 300 || !empty($body['errors'])) {
-      delete_transient('gotab_token');
-      delete_transient($this->gotab_token_transient_key($o));
-      return new WP_Error('gotab_graph_error', 'We couldn’t look up that receipt right now. Please try again.', $body ?: ['httpCode' => $code]);
+    foreach ($location_ids as $location_id) {
+      $alias = 'loc' . $alias_index;
+      $aliases[$alias] = (string) $location_id;
+      $query_parts[] = $alias . ': tabsList(condition: { locationId: "' . $this->format_bigint_variable($location_id) . '" }, filter: { tabRef: { equalTo: $tabRef } }, first: 2) { ' . $fields . ' }';
+      $alias_index++;
     }
 
-    $tabs = $body['data']['tabsList'] ?? [];
+    $query = 'query FindTabByRefAcrossLocations($tabRef: String!) { ' . implode(' ', $query_parts) . ' }';
+    $body = $this->gotab_graph_query($token, $o, $query, ['tabRef' => $tab_ref]);
 
-    if (count($tabs) < 1) {
+    if (is_wp_error($body)) {
+      return $body;
+    }
+
+    foreach ($aliases as $alias => $location_id) {
+      $tabs = $body['data'][$alias] ?? [];
+
+      if (count($tabs) > 1) {
+        return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', $body);
+      }
+
+      if (count($tabs) === 1) {
+        $matches[] = $tabs[0];
+
+        if (count($matches) > 1) {
+          return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', ['matches' => $matches, 'response' => $body]);
+        }
+      }
+    }
+
+    if (count($matches) < 1) {
       return new WP_Error('gotab_not_found', $o['gotab_not_found_message'], $body);
     }
 
-    if (count($tabs) > 1) {
-      return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', $body);
+    if (empty($matches[0]['tabId'])) {
+      return new WP_Error('gotab_missing_tab_id', 'We found a matching receipt, but we couldn’t verify it. Please try again or contact support.', $matches[0]);
     }
 
-    if (empty($tabs[0]['tabId'])) {
-      return new WP_Error('gotab_missing_tab_id', 'We found a matching receipt, but we couldn’t verify it. Please try again or contact support.', $body);
-    }
-
-    return $tabs[0];
+    return $matches[0];
   }
 
   private function gotab_token($o) {
@@ -659,6 +680,63 @@ final class Receipt_Claim {
     set_transient($this->gotab_token_transient_key($o), $body['token'], $ttl);
 
     return $body['token'];
+  }
+
+  private function gotab_location_ids($token, $o) {
+    $cached = get_transient($this->gotab_location_transient_key($o));
+
+    if (is_array($cached) && !empty($cached)) {
+      return $cached;
+    }
+
+    $query = 'query ListLocations { locationsList { locationId } }';
+    $body = $this->gotab_graph_query($token, $o, $query);
+
+    if (is_wp_error($body)) {
+      return $body;
+    }
+
+    $locations = $body['data']['locationsList'] ?? [];
+    $location_ids = [];
+
+    foreach ($locations as $location) {
+      if (!empty($location['locationId'])) {
+        $location_ids[] = (string) $location['locationId'];
+      }
+    }
+
+    $location_ids = array_values(array_unique($location_ids));
+
+    if ($o['gotab_location_id'] !== '' && in_array((string) $o['gotab_location_id'], $location_ids, true)) {
+      $preferred = (string) $o['gotab_location_id'];
+      $location_ids = array_values(array_diff($location_ids, [$preferred]));
+      array_unshift($location_ids, $preferred);
+    }
+
+    if (!empty($location_ids)) {
+      set_transient($this->gotab_location_transient_key($o), $location_ids, 30 * MINUTE_IN_SECONDS);
+    }
+
+    return $location_ids;
+  }
+
+  private function gotab_graph_query($token, $o, $query, $variables = []) {
+    $response = wp_remote_post($o['gotab_graph_url'], ['timeout' => 20, 'headers' => ['Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'Accept' => 'application/json'], 'body' => wp_json_encode(['query' => $query, 'variables' => $variables])]);
+
+    if (is_wp_error($response)) {
+      return new WP_Error('gotab_request_failed', 'We couldn’t look up that receipt right now. Please try again.', $response->get_error_message());
+    }
+
+    $code = wp_remote_retrieve_response_code($response);
+    $body = json_decode(wp_remote_retrieve_body($response), true);
+
+    if ($code < 200 || $code >= 300 || !empty($body['errors'])) {
+      delete_transient('gotab_token');
+      delete_transient($this->gotab_token_transient_key($o));
+      return new WP_Error('gotab_graph_error', 'We couldn’t look up that receipt right now. Please try again.', $body ?: ['httpCode' => $code]);
+    }
+
+    return $body;
   }
 
   private function clutch_search_card($filters, $o, $filter_logic_and = true) {
@@ -699,7 +777,7 @@ final class Receipt_Claim {
 
   private function clutch_barcode_claim($external_id, $card_number, $o) {
     $url = trailingslashit($this->clutch_base_url($o)) . 'flex/barcodeClaim';
-    $response = wp_remote_post($url, ['timeout' => 25, 'headers' => array_merge($this->clutch_headers($o), ['customRequestId' => '' . wp_generate_uuid4()]), 'body' => wp_json_encode(['externalId' => $external_id, 'cardNumber' => $card_number])]);
+    $response = wp_remote_post($url, ['timeout' => 25, 'headers' => $this->clutch_claim_headers($external_id, $o), 'body' => wp_json_encode(['externalId' => $external_id, 'cardNumber' => $card_number])]);
 
     if (is_wp_error($response)) {
       return new WP_Error('clutch_claim_failed', 'Receipt claim failed. Please try again.', $response->get_error_message());
@@ -717,6 +795,27 @@ final class Receipt_Claim {
     }
 
     return $body;
+  }
+
+  private function clutch_claim_headers($external_id, $o) {
+    $request_id = wp_generate_uuid4();
+
+    return array_merge($this->clutch_headers($o), [
+      'customRequestId' => $request_id,
+      'externalTransactionId' => $this->clutch_external_transaction_id($external_id, $request_id)
+    ]);
+  }
+
+  private function clutch_external_transaction_id($external_id, $request_id) {
+    $root = preg_replace('/[^A-Za-z0-9_-]/', '-', (string) $external_id);
+    $root = trim($root, '-_');
+    $suffix = gmdate('YmdHis') . '-' . substr(str_replace('-', '', (string) $request_id), 0, 8);
+
+    if ($root === '') {
+      return 'claim-' . $suffix;
+    }
+
+    return $root . '-claim-' . $suffix;
   }
 
   private function clutch_headers($o) {
@@ -754,6 +853,11 @@ final class Receipt_Claim {
     delete_transient($this->gotab_token_transient_key($options, 'production'));
   }
 
+  private function clear_gotab_location_transients($options) {
+    delete_transient($this->gotab_location_transient_key($options, 'stage'));
+    delete_transient($this->gotab_location_transient_key($options, 'production'));
+  }
+
   private function gotab_token_transient_key($options, $environment = '') {
     if ($environment === '') {
       $environment = $options['clutch_environment'] === 'production' ? 'production' : 'stage';
@@ -763,6 +867,17 @@ final class Receipt_Claim {
     $access_id = $environment === 'production' ? $options['gotab_prod_api_access_id'] : $options['gotab_stage_api_access_id'];
 
     return 'receipt_claim_gotab_token_' . md5($environment . '|' . $token_url . '|' . $access_id);
+  }
+
+  private function gotab_location_transient_key($options, $environment = '') {
+    if ($environment === '') {
+      $environment = $options['clutch_environment'] === 'production' ? 'production' : 'stage';
+    }
+
+    $graph_url = $environment === 'production' ? $options['gotab_prod_graph_url'] : $options['gotab_stage_graph_url'];
+    $access_id = $environment === 'production' ? $options['gotab_prod_api_access_id'] : $options['gotab_stage_api_access_id'];
+
+    return 'receipt_claim_gotab_locations_' . md5($environment . '|' . $graph_url . '|' . $access_id);
   }
 
   private function tab_is_within_claim_window($tab, $o) {
