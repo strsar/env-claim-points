@@ -532,12 +532,12 @@ final class Receipt_Claim {
     $tab = $this->gotab_lookup_tab($tab_ref, $o);
 
     if (is_wp_error($tab)) {
-      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'gotab_error', 'message' => $tab->get_error_message(), 'raw_context' => $this->debug_context($tab->get_error_data(), $o)]);
+      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'gotab_error', 'message' => $tab->get_error_message(), 'raw_context' => $this->debug_context($tab->get_error_data(), $o)], $o);
       return $this->error_response('gotab_error', $tab->get_error_message(), 400);
     }
 
     if (!$this->tab_is_within_claim_window($tab, $o)) {
-      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'expired', 'message' => $o['expired_message'], 'gotab_tab_id' => $tab['tabId'] ?? '', 'raw_context' => $this->debug_context($tab, $o)]);
+      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'expired', 'message' => $o['expired_message'], 'gotab_tab_id' => $tab['tabId'] ?? '', 'raw_context' => $this->debug_context($tab, $o)], $o);
       return $this->error_response('expired', $o['expired_message'], 400);
     }
 
@@ -562,7 +562,7 @@ final class Receipt_Claim {
     }
 
     if (is_wp_error($card_number)) {
-      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'member_not_found', 'message' => $card_number->get_error_message(), 'gotab_tab_id' => $tab['tabId'] ?? '', 'raw_context' => $this->debug_context($card_number->get_error_data(), $o)]);
+      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'member_not_found', 'message' => $card_number->get_error_message(), 'gotab_tab_id' => $tab['tabId'] ?? '', 'raw_context' => $this->debug_context($card_number->get_error_data(), $o)], $o);
       return $this->error_response('member_not_found', $card_number->get_error_message(), 400);
     }
 
@@ -570,7 +570,7 @@ final class Receipt_Claim {
 
     if (is_wp_error($claim)) {
       $data = $claim->get_error_data();
-      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'claim_error', 'message' => $claim->get_error_message(), 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $data['requestRef'] ?? '', 'clutch_checkout_request_ref' => $data['checkoutRequestRef'] ?? '', 'clutch_success' => isset($data['success']) ? (int) (bool) $data['success'] : null, 'clutch_checkout_was_claimed' => isset($data['checkoutWasClaimed']) ? (int) (bool) $data['checkoutWasClaimed'] : null, 'raw_context' => $this->debug_context($data, $o)]);
+      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'claim_error', 'message' => $claim->get_error_message(), 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $data['requestRef'] ?? '', 'clutch_checkout_request_ref' => $data['checkoutRequestRef'] ?? '', 'clutch_success' => isset($data['success']) ? (int) (bool) $data['success'] : null, 'clutch_checkout_was_claimed' => isset($data['checkoutWasClaimed']) ? (int) (bool) $data['checkoutWasClaimed'] : null, 'raw_context' => $this->debug_context($data, $o)], $o);
       return $this->error_response('claim_error', $claim->get_error_message(), 400, ['requestRef' => $data['requestRef'] ?? '']);
     }
 
@@ -580,12 +580,12 @@ final class Receipt_Claim {
     $checkout_request_ref = $claim['checkoutRequestRef'] ?? '';
 
     if ($success && $checkout_was_claimed) {
-      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'success', 'message' => $o['success_message'], 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $request_ref, 'clutch_checkout_request_ref' => $checkout_request_ref, 'clutch_success' => 1, 'clutch_checkout_was_claimed' => 1, 'raw_context' => $this->debug_context($claim, $o)]);
+      $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'success', 'message' => $o['success_message'], 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $request_ref, 'clutch_checkout_request_ref' => $checkout_request_ref, 'clutch_success' => 1, 'clutch_checkout_was_claimed' => 1, 'raw_context' => $this->debug_context($claim, $o)], $o);
       return rest_ensure_response(['success' => true, 'message' => $o['success_message'], 'requestRef' => $request_ref]);
     }
 
     $message = $success && !$checkout_was_claimed ? $o['already_claimed_message'] : $this->clutch_claim_message($claim, $o);
-    $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'not_claimed', 'message' => $message, 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $request_ref, 'clutch_checkout_request_ref' => $checkout_request_ref, 'clutch_success' => (int) $success, 'clutch_checkout_was_claimed' => (int) $checkout_was_claimed, 'raw_context' => $this->debug_context($claim, $o)]);
+    $this->log_attempt(['tab_ref' => $tab_ref, 'loyalty_type' => $loyalty_type, 'status' => 'not_claimed', 'message' => $message, 'gotab_tab_id' => $tab['tabId'] ?? '', 'clutch_request_ref' => $request_ref, 'clutch_checkout_request_ref' => $checkout_request_ref, 'clutch_success' => (int) $success, 'clutch_checkout_was_claimed' => (int) $checkout_was_claimed, 'raw_context' => $this->debug_context($claim, $o)], $o);
 
     return $this->error_response('not_claimed', $message, 400, ['requestRef' => $request_ref]);
   }
@@ -1021,12 +1021,20 @@ final class Receipt_Claim {
     return hash_hmac('sha256', $ip, wp_salt('auth'));
   }
 
-  private function log_attempt($data) {
+  private function log_attempt($data, $o = []) {
+    if ($this->logging_disabled($o)) {
+      return;
+    }
+
     global $wpdb;
     self::ensure_log_table();
     $table = $wpdb->prefix . self::LOG_TABLE;
     $defaults = ['created_at' => current_time('mysql'), 'ip_hash' => $this->ip_hash(), 'tab_ref' => '', 'loyalty_type' => '', 'status' => '', 'message' => '', 'gotab_tab_id' => '', 'clutch_request_ref' => '', 'clutch_checkout_request_ref' => '', 'clutch_success' => null, 'clutch_checkout_was_claimed' => null, 'raw_context' => null];
     $wpdb->insert($table, wp_parse_args($data, $defaults));
+  }
+
+  private function logging_disabled($o) {
+    return empty($o['debug_mode']) || $o['debug_mode'] !== '1';
   }
 
   private static function ensure_log_table() {
@@ -1064,7 +1072,7 @@ final class Receipt_Claim {
   }
 
   private function debug_context($data, $o) {
-    if ($o['debug_mode'] !== '1') {
+    if ($this->logging_disabled($o)) {
       return null;
     }
 

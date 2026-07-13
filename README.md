@@ -45,7 +45,7 @@ Optional attributes:
 11. The claim is considered successful only when Clutch returns both:
     - `success = true`
     - `checkoutWasClaimed = true`
-12. Every attempt is logged. When Debug Mode is enabled, the upstream GoTab or Clutch response body is stored and shown in the Logs tab.
+12. When Debug Mode is enabled, each attempt is logged and the upstream GoTab or Clutch response body is stored and shown in the Logs tab.
 
 ## Required Settings
 
@@ -65,6 +65,7 @@ Go to **Settings -> Receipt Claim** and configure:
 - Clutch Card Set ID(s) can be stored per environment, but the current workflow does not send them in requests.
 - The plugin currently sends GoTab `tabId` as Clutch `externalId` in `/flex/barcodeClaim`.
 - The plugin auto-creates its log table if it does not exist yet.
+- When Debug Mode is disabled, the plugin does not write claim log records.
 - The Logs tab shows both the plugin message and the raw upstream server response when Debug Mode is enabled.
 - The plugin hashes IP addresses and does not intentionally log raw phone or email values.
 - For production, consider adding a real CAPTCHA or WAF rule in addition to the included honeypot and rate limit.
