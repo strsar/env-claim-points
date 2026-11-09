@@ -1,10 +1,15 @@
 <?php
 /**
  * Plugin Name: [ENV] Receipt Claim Manager
+ * Plugin URI: https://github.com/strsar/env-claim-points
  * Description: Adds a shortcode-based receipt claim form that looks up GoTab receipt details and submits (tabRef → tabId) eligible loyalty point claims through Clutch (barcodeClaim).
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Envisionit, Scott Trsar
  * Author URI: https://envisionitagency.com/
+ * Requires at least: 6.4
+ * Requires PHP: 7.4
+ * Update URI: https://github.com/strsar/env-claim-points
+ * Primary Branch: main
  * Developer: Scott Trsar
  * Contact: https://www.linkedin.com/in/trsar
  * Github: https://github.com/strsar
@@ -15,11 +20,14 @@ if (!defined('ABSPATH')) {
 }
 
 final class Receipt_Claim {
-  const VERSION = '1.0.1';
+  const VERSION = '1.0.2';
   const OPTION = 'receipt_claim_options';
   const LOG_TABLE = 'receipt_claim_logs';
+  const GITHUB_REPO = 'https://github.com/strsar/env-claim-points/';
+  const GITHUB_TOKEN = '';
 
   private static $instance = null;
+  private $update_checker = null;
 
   public static function instance() {
     if (self::$instance === null) {
@@ -30,6 +38,7 @@ final class Receipt_Claim {
   }
 
   private function __construct() {
+    $this->register_update_checker();
     add_action('admin_menu', [$this, 'admin_menu']);
     add_action('admin_init', [$this, 'register_settings']);
     add_shortcode('receipt_claim_form', [$this, 'shortcode']);
@@ -37,6 +46,41 @@ final class Receipt_Claim {
     add_action('rest_api_init', [$this, 'register_rest_routes']);
     add_filter('plugin_action_links_' . plugin_basename(__FILE__), [$this, 'plugin_action_links']);
     register_activation_hook(__FILE__, [__CLASS__, 'activate']);
+  }
+
+  /**
+   * Checks GitHub releases for new versions so sites can update from the
+   * WordPress Plugins screen. For a private repo, set GITHUB_TOKEN or use the
+   * env_claim_points_github_token filter.
+   */
+  private function register_update_checker() {
+    if ($this->update_checker !== null) {
+      return;
+    }
+
+    $loader = plugin_dir_path(__FILE__) . 'lib/plugin-update-checker/plugin-update-checker.php';
+    if (!file_exists($loader)) {
+      return;
+    }
+
+    require_once $loader;
+
+    $this->update_checker = \YahnisElsts\PluginUpdateChecker\v5p7\PucFactory::buildUpdateChecker(
+      self::GITHUB_REPO,
+      __FILE__,
+      'env-claim-points'
+    );
+
+    $this->update_checker->setBranch('main');
+
+    $token = self::GITHUB_TOKEN;
+    if ($token === '') {
+      $token = apply_filters('env_claim_points_github_token', '');
+    }
+
+    if (is_string($token) && trim($token) !== '') {
+      $this->update_checker->setAuthentication(trim($token));
+    }
   }
 
   public static function activate() {
@@ -82,7 +126,7 @@ final class Receipt_Claim {
       'success_message' => 'Your receipt was successfully claimed and points have been added to your account.',
       'already_claimed_message' => 'This receipt has already been applied to a loyalty account.',
       'generic_error_message' => 'We were unable to process this receipt claim. Please verify your information or try again later.',
-      'gotab_not_found_message' => 'We couldn’t find a receipt matching this number. Please check the number and try again.',
+      'gotab_not_found_message' => 'We couldn’t find a receipt matching this code. Please check the code printed on your receipt and try again.',
       'expired_message' => 'We\'re sorry, but this receipt is outside the eligible claim window.',
       'member_not_found_message' => 'We couldn’t find a loyalty account matching this information. Please check your details or try a different identifier.',
       'enable_honeypot' => '1',
@@ -444,7 +488,7 @@ final class Receipt_Claim {
         <?php endif; ?>
       </div>
       
-      <div class="receipt-claim__field"><label for="tab-ref">Receipt / Check Number</label><input type="text" id="tab-ref" name="tabRef" required autocomplete="off"></div>
+      <div class="receipt-claim__field"><label for="tab-ref">Receipt Code</label><input type="text" id="tab-ref" name="tabRef" required autocomplete="off" aria-describedby="tab-ref-help"><p class="receipt-claim__help" id="tab-ref-help">Enter the code printed next to &ldquo;Code&rdquo; on your receipt.</p></div>
       <fieldset class="receipt-claim__fieldset">
         <legend>Choose one loyalty identifier</legend>
         <label class="receipt-claim__choice"><input type="radio" name="loyaltyType" value="cardNumber" checked><span>Loyalty card number</span></label>
@@ -611,35 +655,61 @@ final class Receipt_Claim {
     $query_parts = [];
     $matches = [];
     $alias_index = 0;
+    $fiscal_day_filter = $this->gotab_fiscal_day_filter($o);
 
     foreach ($location_ids as $location_id) {
       $alias = 'loc' . $alias_index;
       $aliases[$alias] = (string) $location_id;
-      $query_parts[] = $alias . ': tabsList(condition: { locationId: "' . $this->format_bigint_variable($location_id) . '" }, filter: { tabRef: { equalTo: $tabRef } }, first: 2) { ' . $fields . ' }';
+      $query_parts[] = $alias . ': tabsList(condition: { locationId: "' . $this->format_bigint_variable($location_id) . '" }, filter: { tabRef: { equalTo: $tabRef }' . $fiscal_day_filter . ' }, first: 2) { ' . $fields . ' }';
       $alias_index++;
     }
 
     $query = 'query FindTabByRefAcrossLocations($tabRef: String!) { ' . implode(' ', $query_parts) . ' }';
-    $body = $this->gotab_graph_query($token, $o, $query, ['tabRef' => $tab_ref]);
+    $body = $this->gotab_graph_query($token, $o, $query, ['tabRef' => $tab_ref], true);
 
     if (is_wp_error($body)) {
       return $body;
     }
 
+    $errors = !empty($body['errors']) && is_array($body['errors']) ? $body['errors'] : [];
+    $error_aliases = [];
+
+    foreach ($errors as $error) {
+      $path = !empty($error['path']) && is_array($error['path']) ? $error['path'] : [];
+      if (!empty($path[0]) && is_string($path[0])) {
+        $error_aliases[] = $path[0];
+      }
+    }
+
+    $error_aliases = array_values(array_unique($error_aliases));
+    $lookup_context = ['aliases' => $aliases, 'response' => $body];
+
     foreach ($aliases as $alias => $location_id) {
       $tabs = $body['data'][$alias] ?? [];
 
+      if ($tabs === null && in_array($alias, $error_aliases, true)) {
+        continue;
+      }
+
+      if (!is_array($tabs)) {
+        $tabs = [];
+      }
+
       if (count($tabs) > 1) {
-        return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', $body);
+        return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', $lookup_context);
       }
 
       if (count($tabs) === 1) {
         $matches[] = $tabs[0];
 
         if (count($matches) > 1) {
-          return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', ['matches' => $matches, 'response' => $body]);
+          return new WP_Error('gotab_multiple_matches', 'We found more than one matching receipt for that number. Please contact support.', ['matches' => $matches, 'aliases' => $aliases, 'response' => $body]);
         }
       }
+    }
+
+    if (!empty($errors) && count($matches) < 1) {
+      return new WP_Error('gotab_graph_error', 'We couldn’t look up that receipt right now. Please try again.', $lookup_context);
     }
 
     if (count($matches) < 1) {
@@ -720,7 +790,7 @@ final class Receipt_Claim {
     return $location_ids;
   }
 
-  private function gotab_graph_query($token, $o, $query, $variables = []) {
+  private function gotab_graph_query($token, $o, $query, $variables = [], $allow_partial_errors = false) {
     $response = wp_remote_post($o['gotab_graph_url'], ['timeout' => 20, 'headers' => ['Authorization' => 'Bearer ' . $token, 'Content-Type' => 'application/json', 'Accept' => 'application/json'], 'body' => wp_json_encode(['query' => $query, 'variables' => $variables])]);
 
     if (is_wp_error($response)) {
@@ -730,7 +800,7 @@ final class Receipt_Claim {
     $code = wp_remote_retrieve_response_code($response);
     $body = json_decode(wp_remote_retrieve_body($response), true);
 
-    if ($code < 200 || $code >= 300 || !empty($body['errors'])) {
+    if ($code < 200 || $code >= 300 || (!$allow_partial_errors && !empty($body['errors']))) {
       delete_transient('gotab_token');
       delete_transient($this->gotab_token_transient_key($o));
       return new WP_Error('gotab_graph_error', 'We couldn’t look up that receipt right now. Please try again.', $body ?: ['httpCode' => $code]);
@@ -880,6 +950,25 @@ final class Receipt_Claim {
     return 'receipt_claim_gotab_locations_' . md5($environment . '|' . $graph_url . '|' . $access_id);
   }
 
+  /**
+   * Limits the tab lookup to the claim window using GoTab's indexed fiscalDay
+   * column. Without it, tabRef (not indexed) forces a full-history scan per
+   * location and the query hits GoTab's 5-second timeout. One extra day on
+   * each side covers timezone differences between WordPress and the location.
+   */
+  private function gotab_fiscal_day_filter($o) {
+    $amount = absint($o['claim_duration_amount']);
+    if ($amount === 0) {
+      return '';
+    }
+
+    $now = current_time('timestamp');
+    $from = gmdate('Y-m-d', strtotime('-' . $amount . ' ' . $o['claim_duration_unit'] . ' -1 day', $now));
+    $to = gmdate('Y-m-d', strtotime('+1 day', $now));
+
+    return ', fiscalDay: { greaterThanOrEqualTo: "' . $from . '", lessThanOrEqualTo: "' . $to . '" }';
+  }
+
   private function tab_is_within_claim_window($tab, $o) {
     $amount = absint($o['claim_duration_amount']);
     if ($amount === 0) {
@@ -942,7 +1031,7 @@ final class Receipt_Claim {
     $message_lower = strtolower($message);
 
     if (strpos($message_lower, 'no checkout found with externalid') !== false) {
-      return 'We found your loyalty account, but this receipt is not available to claim yet. Please verify the receipt number and try again later.';
+      return 'We found your loyalty account, but this receipt is not available to claim yet. Please verify the receipt code and try again later.';
     }
 
     if (strpos($message_lower, 'more than one transaction found with externalid') !== false) {

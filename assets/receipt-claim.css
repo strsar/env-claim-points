@@ -17,3 +17,9 @@
 .receipt-claim__message[data-type="success"]{color:#167a36}
 .receipt-claim__message[data-type="error"]{color:#b42318}
 .receipt-claim__hp{position:absolute;left:-10000px;width:1px;height:1px;overflow:hidden}
+
+.receipt-claim__help {
+  margin: 0.35em 0 0;
+  font-size: 0.875em;
+  opacity: 0.8;
+}

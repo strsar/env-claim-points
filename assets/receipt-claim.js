@@ -75,7 +75,7 @@
       const loyaltyType = getLoyaltyType();
 
       if (!tabRef || !tabRef.value.trim()) {
-        setFieldError(tabRef, 'Please enter the receipt or check number from your receipt.');
+        setFieldError(tabRef, 'Please enter the code from your receipt.');
         return false;
       }
 
